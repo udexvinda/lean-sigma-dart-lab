@@ -1,15 +1,19 @@
 import math
 import numpy as np
+import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Lean Sigma Dart Lab", layout="wide")
 
+# -----------------------------
+# Dartboard scoring (simplified)
+# -----------------------------
 SECTOR_ORDER = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5]
 
 
 def angle_to_sector(theta_deg: float) -> int:
+    """theta_deg: 0 at +x axis, CCW. Dartboard sectors start at 20 centered at 90 degrees (top)."""
     theta = theta_deg % 360.0
     shifted = (90.0 - theta) % 360.0
     idx = int((shifted + 9.0) // 18.0) % 20
@@ -17,6 +21,16 @@ def angle_to_sector(theta_deg: float) -> int:
 
 
 def score_dart(x: float, y: float) -> int:
+    """
+    x,y in normalized board coordinates where radius 1.0 is board edge.
+    Very simplified rings:
+      - Bull: r <= 0.05 => 50
+      - Outer bull: r <= 0.10 => 25
+      - Triple ring: 0.55 <= r <= 0.60
+      - Double ring: 0.95 <= r <= 1.00
+      - Single otherwise within r<=1
+      - Miss if r>1
+    """
     r = math.sqrt(x * x + y * y)
     if r > 1.0:
         return 0
@@ -35,54 +49,36 @@ def score_dart(x: float, y: float) -> int:
     return base
 
 
-def draw_board(hit=None, title="Dartboard"):
-    fig, ax = plt.subplots(figsize=(5.8, 5.8))  # a bit bigger like your screenshot
-    ax.set_aspect("equal")
-    ax.set_xlim(-1.05, 1.05)
-    ax.set_ylim(-1.05, 1.05)
-    ax.axis("off")
-
-    # outline + simple rings
-    ax.add_patch(plt.Circle((0, 0), 1.0, fill=False, linewidth=2))
-    for rr in [0.10, 0.55, 0.60, 0.95, 1.00]:
-        ax.add_patch(plt.Circle((0, 0), rr, fill=False, linestyle="--", linewidth=1))
-
-    # sector lines
-    for i in range(20):
-        ang = math.radians(90 - i * 18)
-        ax.plot([0, math.cos(ang)], [0, math.sin(ang)], linewidth=0.7)
-
-    # bull
-    ax.add_patch(plt.Circle((0, 0), 0.10, fill=False, linewidth=2))
-    ax.add_patch(plt.Circle((0, 0), 0.05, fill=False, linewidth=2))
-
-    # hit dot (orange-like, with glow)
-    if hit is not None:
-        x, y = hit
-        ax.scatter([x], [y], s=110, marker="o")              # dot
-        ax.scatter([x], [y], s=260, marker="o", alpha=0.25)  # glow
-
-    ax.set_title(title)
-    return fig
+def clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
 
 
 # -----------------------------
-# Session state
+# Session state init
 # -----------------------------
 if "t" not in st.session_state:
     st.session_state.t = 0
-if "hit" not in st.session_state:
-    st.session_state.hit = None
-if "last_score" not in st.session_state:
-    st.session_state.last_score = None
-if "data" not in st.session_state:
-    st.session_state.data = []
+
 if "freeze" not in st.session_state:
     st.session_state.freeze = None  # (hx, vy, strength)
 
-# Auto-refresh ONLY for calibration bars (lightweight)
+if "hit" not in st.session_state:
+    st.session_state.hit = None  # (x, y)
+
+if "last_score" not in st.session_state:
+    st.session_state.last_score = None
+
+if "data" not in st.session_state:
+    st.session_state.data = []  # list of dict rows
+
+
+# -----------------------------
+# Auto-refresh ONLY to animate the calibration bars
+# (This is lightweight now because we no longer render Matplotlib figures.)
+# -----------------------------
 st_autorefresh(interval=140, key="tick")
 st.session_state.t += 1
+
 
 # -----------------------------
 # Layout
@@ -94,16 +90,16 @@ with left:
 
     t = st.session_state.t
 
-    # moving signals
-    hx = math.sin(t / 7.0)              # -1..1
-    vy = math.sin(t / 9.0 + 1.7)        # -1..1
+    # Oscillators for calibration deck
+    hx = math.sin(t / 7.0)                 # -1..1
+    vy = math.sin(t / 9.0 + 1.7)           # -1..1
     strength = (math.sin(t / 11.0 + 0.8) + 1) / 2  # 0..1
 
-    # If last throw exists, show frozen values (optional: comment out if you want always moving)
-    if st.session_state.freeze is not None:
-        live_hx, live_vy, live_s = st.session_state.freeze
-    else:
+    # Display live moving values unless frozen from last throw
+    if st.session_state.freeze is None:
         live_hx, live_vy, live_s = hx, vy, strength
+    else:
+        live_hx, live_vy, live_s = st.session_state.freeze
 
     st.write("**Horizontal (Left ↔ Right)**")
     st.progress(int((live_hx + 1) / 2 * 100))
@@ -120,35 +116,41 @@ with left:
     throw = st.button("🎯 THROW", type="primary", use_container_width=True)
 
     if throw:
-        # freeze the current values
+        # Freeze the calibration signals at the moment of throw
         st.session_state.freeze = (hx, vy, strength)
 
-        # compute hit immediately (NO animation)
-        s = strength
+        # Map to aim point (normalized board coordinates)
         aim_x = 0.70 * hx
         aim_y = 0.70 * vy
 
-        sigma = 0.03 + 0.10 * s
-        overshoot = 0.00 + 0.12 * s
+        # Strength influences noise/spread (tune these as you like)
+        sigma = 0.03 + 0.10 * strength
+        overshoot = 0.00 + 0.12 * strength
 
         x = aim_x + np.random.normal(0, sigma) + overshoot * np.sign(aim_x) * 0.2
         y = aim_y + np.random.normal(0, sigma) + overshoot * np.sign(aim_y) * 0.2
 
+        # Keep inside a reasonable range (still allows misses if you want: set to [-1.2,1.2])
+        x = clamp(x, -1.2, 1.2)
+        y = clamp(y, -1.2, 1.2)
+
         st.session_state.hit = (x, y)
+
         sc = score_dart(x, y)
         st.session_state.last_score = sc
 
         r = math.sqrt(x * x + y * y)
+
         st.session_state.data.append(
             {
                 "throw_id": len(st.session_state.data) + 1,
                 "hx": hx,
                 "vy": vy,
-                "strength": s,
-                "x": x,
-                "y": y,
-                "radius": r,
-                "score": sc,
+                "strength": float(strength),
+                "x": float(x),
+                "y": float(y),
+                "radius": float(r),
+                "score": int(sc),
             }
         )
 
@@ -169,30 +171,34 @@ with left:
 with right:
     st.subheader("Dartboard")
 
-    # ✅ IMPORTANT: only draw the board ONCE per rerun, but reruns are cheap now because board is not drawn repeatedly in animation.
-    # Still, we'll keep it minimal.
-    if st.session_state.hit is None:
-        fig = draw_board(hit=None, title="Ready")
-    else:
-        fig = draw_board(hit=st.session_state.hit, title=f"Score: {st.session_state.last_score}")
+    # Build a lightweight "board area" using scatter_chart.
+    # We force the chart range by adding invisible corner points.
+    points = [{"x": -1.05, "y": -1.05, "kind": "bounds"},
+              {"x":  1.05, "y":  1.05, "kind": "bounds"}]
 
-    st.pyplot(fig, clear_figure=True)
-    plt.close(fig)
+    # Add actual hit point only after THROW
+    if st.session_state.hit is not None:
+        x, y = st.session_state.hit
+        points.append({"x": x, "y": y, "kind": "hit"})
+
+    dfp = pd.DataFrame(points)
+
+    # Show dot only when present; bounds points ensure consistent scale.
+    st.scatter_chart(dfp, x="x", y="y", height=520)
 
     if st.session_state.last_score is not None:
         st.metric("Score", st.session_state.last_score)
 
-# Dataset
 st.divider()
 st.subheader("Collected Data (for SPC / Analytics)")
-if st.session_state.data:
-    st.dataframe(st.session_state.data, use_container_width=True)
 
-    import pandas as pd
-    df = pd.DataFrame(st.session_state.data)
+if st.session_state.data:
+    dfd = pd.DataFrame(st.session_state.data)
+    st.dataframe(dfd, use_container_width=True)
+
     st.download_button(
         "Download CSV",
-        df.to_csv(index=False).encode("utf-8"),
+        dfd.to_csv(index=False).encode("utf-8"),
         "dart_data.csv",
         "text/csv",
     )
