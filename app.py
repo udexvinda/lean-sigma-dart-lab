@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+import altair as alt
 
 st.set_page_config(page_title="Lean Sigma Dart Lab", layout="wide")
 
@@ -23,7 +24,7 @@ def angle_to_sector(theta_deg: float) -> int:
 def score_dart(x: float, y: float) -> int:
     """
     x,y in normalized board coordinates where radius 1.0 is board edge.
-    Very simplified rings:
+    Simplified rings:
       - Bull: r <= 0.05 => 50
       - Outer bull: r <= 0.10 => 25
       - Triple ring: 0.55 <= r <= 0.60
@@ -74,7 +75,6 @@ if "data" not in st.session_state:
 
 # -----------------------------
 # Auto-refresh ONLY to animate the calibration bars
-# (This is lightweight now because we no longer render Matplotlib figures.)
 # -----------------------------
 st_autorefresh(interval=140, key="tick")
 st.session_state.t += 1
@@ -90,12 +90,12 @@ with left:
 
     t = st.session_state.t
 
-    # Oscillators for calibration deck
-    hx = math.sin(t / 7.0)                 # -1..1
-    vy = math.sin(t / 9.0 + 1.7)           # -1..1
+    # Moving signals
+    hx = math.sin(t / 7.0)  # -1..1
+    vy = math.sin(t / 9.0 + 1.7)  # -1..1
     strength = (math.sin(t / 11.0 + 0.8) + 1) / 2  # 0..1
 
-    # Display live moving values unless frozen from last throw
+    # Display frozen values if a throw happened; otherwise live
     if st.session_state.freeze is None:
         live_hx, live_vy, live_s = hx, vy, strength
     else:
@@ -116,36 +116,34 @@ with left:
     throw = st.button("🎯 THROW", type="primary", use_container_width=True)
 
     if throw:
-        # Freeze the calibration signals at the moment of throw
+        # Freeze values at the throw moment
         st.session_state.freeze = (hx, vy, strength)
 
-        # Map to aim point (normalized board coordinates)
+        # Map to aim point (normalized board coords)
         aim_x = 0.70 * hx
         aim_y = 0.70 * vy
 
-        # Strength influences noise/spread (tune these as you like)
+        # Strength affects spread
         sigma = 0.03 + 0.10 * strength
         overshoot = 0.00 + 0.12 * strength
 
         x = aim_x + np.random.normal(0, sigma) + overshoot * np.sign(aim_x) * 0.2
         y = aim_y + np.random.normal(0, sigma) + overshoot * np.sign(aim_y) * 0.2
 
-        # Keep inside a reasonable range (still allows misses if you want: set to [-1.2,1.2])
+        # Allow slight overshoot outside the board for "miss" (kept in visible frame)
         x = clamp(x, -1.2, 1.2)
         y = clamp(y, -1.2, 1.2)
 
         st.session_state.hit = (x, y)
-
         sc = score_dart(x, y)
         st.session_state.last_score = sc
 
         r = math.sqrt(x * x + y * y)
-
         st.session_state.data.append(
             {
                 "throw_id": len(st.session_state.data) + 1,
-                "hx": hx,
-                "vy": vy,
+                "hx": float(hx),
+                "vy": float(vy),
                 "strength": float(strength),
                 "x": float(x),
                 "y": float(y),
@@ -171,20 +169,24 @@ with left:
 with right:
     st.subheader("Dartboard")
 
-    # Build a lightweight "board area" using scatter_chart.
-    # We force the chart range by adding invisible corner points.
-    points = [{"x": -1.05, "y": -1.05, "kind": "bounds"},
-              {"x":  1.05, "y":  1.05, "kind": "bounds"}]
-
-    # Add actual hit point only after THROW
-    if st.session_state.hit is not None:
+    # Only plot the real hit (no fake bound points)
+    if st.session_state.hit is None:
+        dfp = pd.DataFrame({"x": [], "y": []})
+    else:
         x, y = st.session_state.hit
-        points.append({"x": x, "y": y, "kind": "hit"})
+        dfp = pd.DataFrame({"x": [x], "y": [y]})
 
-    dfp = pd.DataFrame(points)
+    chart = (
+        alt.Chart(dfp)
+        .mark_circle(size=140)
+        .encode(
+            x=alt.X("x:Q", scale=alt.Scale(domain=[-1.2, 1.2])),
+            y=alt.Y("y:Q", scale=alt.Scale(domain=[-1.2, 1.2])),
+        )
+        .properties(height=520)
+    )
 
-    # Show dot only when present; bounds points ensure consistent scale.
-    st.scatter_chart(dfp, x="x", y="y", height=520)
+    st.altair_chart(chart, use_container_width=True)
 
     if st.session_state.last_score is not None:
         st.metric("Score", st.session_state.last_score)
