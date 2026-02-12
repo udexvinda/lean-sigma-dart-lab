@@ -167,7 +167,7 @@ with left:
             st.session_state.t = 0
 
 with right:
-    st.subheader("Dartboard")
+    st.subheader("Virtual Board")
 
     # Only plot the real hit (no fake bound points)
     if st.session_state.hit is None:
