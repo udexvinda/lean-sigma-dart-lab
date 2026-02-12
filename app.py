@@ -6,14 +6,10 @@ from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Lean Sigma Dart Lab", layout="wide")
 
-# -----------------------------
-# Dartboard scoring (simplified but realistic)
-# -----------------------------
 SECTOR_ORDER = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5]
 
 
 def angle_to_sector(theta_deg: float) -> int:
-    """theta_deg: 0 at +x axis, CCW. Dartboard sectors start at 20 centered at 90 degrees (top)."""
     theta = theta_deg % 360.0
     shifted = (90.0 - theta) % 360.0
     idx = int((shifted + 9.0) // 18.0) % 20
@@ -21,16 +17,6 @@ def angle_to_sector(theta_deg: float) -> int:
 
 
 def score_dart(x: float, y: float) -> int:
-    """
-    x,y in normalized board coordinates where radius 1.0 is board edge.
-    Approx dartboard rings (very simplified):
-      - Bull: r <= 0.05 => 50
-      - Outer bull: r <= 0.10 => 25
-      - Triple ring: 0.55 <= r <= 0.60
-      - Double ring: 0.95 <= r <= 1.00
-      - Single otherwise within r<=1
-      - Miss if r>1
-    """
     r = math.sqrt(x * x + y * y)
     if r > 1.0:
         return 0
@@ -50,55 +36,53 @@ def score_dart(x: float, y: float) -> int:
 
 
 def draw_board(hit=None, title="Dartboard"):
-    fig, ax = plt.subplots(figsize=(5, 5))
+    fig, ax = plt.subplots(figsize=(5.8, 5.8))  # a bit bigger like your screenshot
     ax.set_aspect("equal")
     ax.set_xlim(-1.05, 1.05)
     ax.set_ylim(-1.05, 1.05)
     ax.axis("off")
 
-    # board outline
+    # outline + simple rings
     ax.add_patch(plt.Circle((0, 0), 1.0, fill=False, linewidth=2))
-
-    # rings (visual guides)
-    for rr in [0.10, 0.60, 0.55, 1.00, 0.95]:
+    for rr in [0.10, 0.55, 0.60, 0.95, 1.00]:
         ax.add_patch(plt.Circle((0, 0), rr, fill=False, linestyle="--", linewidth=1))
-
-    # bull / inner bull
-    ax.add_patch(plt.Circle((0, 0), 0.10, fill=False, linewidth=2))
-    ax.add_patch(plt.Circle((0, 0), 0.05, fill=False, linewidth=2))
 
     # sector lines
     for i in range(20):
         ang = math.radians(90 - i * 18)
         ax.plot([0, math.cos(ang)], [0, math.sin(ang)], linewidth=0.7)
 
+    # bull
+    ax.add_patch(plt.Circle((0, 0), 0.10, fill=False, linewidth=2))
+    ax.add_patch(plt.Circle((0, 0), 0.05, fill=False, linewidth=2))
+
+    # hit dot (orange-like, with glow)
     if hit is not None:
         x, y = hit
-        ax.scatter([x], [y], s=140, marker="X")
-        ax.text(x, y, " HIT", fontsize=10, va="bottom")
+        ax.scatter([x], [y], s=110, marker="o")              # dot
+        ax.scatter([x], [y], s=260, marker="o", alpha=0.25)  # glow
 
     ax.set_title(title)
     return fig
 
 
 # -----------------------------
-# Game state
+# Session state
 # -----------------------------
-if "mode" not in st.session_state:
-    st.session_state.mode = "calibrating"  # calibrating | flying | landed
+if "t" not in st.session_state:
     st.session_state.t = 0
-    st.session_state.freeze = None  # (hx, vy, strength)
+if "hit" not in st.session_state:
     st.session_state.hit = None
+if "last_score" not in st.session_state:
     st.session_state.last_score = None
-    st.session_state.data = []  # collected throws
-    st.session_state.flight_frame = 0  # always present
+if "data" not in st.session_state:
+    st.session_state.data = []
+if "freeze" not in st.session_state:
+    st.session_state.freeze = None  # (hx, vy, strength)
 
-
-# Auto-refresh for animation (only when calibrating or flying)
-if st.session_state.mode in ("calibrating", "flying"):
-    st_autorefresh(interval=120, key="tick")  # slightly slower = less load
-    st.session_state.t += 1
-
+# Auto-refresh ONLY for calibration bars (lightweight)
+st_autorefresh(interval=140, key="tick")
+st.session_state.t += 1
 
 # -----------------------------
 # Layout
@@ -110,15 +94,16 @@ with left:
 
     t = st.session_state.t
 
-    # Oscillators: values between -1..1, strength 0..1
-    hx = math.sin(t / 7.0)  # -1..1
-    vy = math.sin(t / 9.0 + 1.7)  # -1..1
+    # moving signals
+    hx = math.sin(t / 7.0)              # -1..1
+    vy = math.sin(t / 9.0 + 1.7)        # -1..1
     strength = (math.sin(t / 11.0 + 0.8) + 1) / 2  # 0..1
 
-    if st.session_state.mode == "calibrating":
-        live_hx, live_vy, live_s = hx, vy, strength
-    else:
+    # If last throw exists, show frozen values (optional: comment out if you want always moving)
+    if st.session_state.freeze is not None:
         live_hx, live_vy, live_s = st.session_state.freeze
+    else:
+        live_hx, live_vy, live_s = hx, vy, strength
 
     st.write("**Horizontal (Left ↔ Right)**")
     st.progress(int((live_hx + 1) / 2 * 100))
@@ -134,96 +119,76 @@ with left:
 
     throw = st.button("🎯 THROW", type="primary", use_container_width=True)
 
-    if throw and st.session_state.mode == "calibrating":
+    if throw:
+        # freeze the current values
         st.session_state.freeze = (hx, vy, strength)
-        st.session_state.mode = "flying"
-        st.session_state.flight_frame = 0
 
+        # compute hit immediately (NO animation)
+        s = strength
+        aim_x = 0.70 * hx
+        aim_y = 0.70 * vy
+
+        sigma = 0.03 + 0.10 * s
+        overshoot = 0.00 + 0.12 * s
+
+        x = aim_x + np.random.normal(0, sigma) + overshoot * np.sign(aim_x) * 0.2
+        y = aim_y + np.random.normal(0, sigma) + overshoot * np.sign(aim_y) * 0.2
+
+        st.session_state.hit = (x, y)
+        sc = score_dart(x, y)
+        st.session_state.last_score = sc
+
+        r = math.sqrt(x * x + y * y)
+        st.session_state.data.append(
+            {
+                "throw_id": len(st.session_state.data) + 1,
+                "hx": hx,
+                "vy": vy,
+                "strength": s,
+                "x": x,
+                "y": y,
+                "radius": r,
+                "score": sc,
+            }
+        )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Clear last hit", use_container_width=True):
+            st.session_state.hit = None
+            st.session_state.last_score = None
+            st.session_state.freeze = None
+    with c2:
+        if st.button("Reset session 🧹", use_container_width=True):
+            st.session_state.hit = None
+            st.session_state.last_score = None
+            st.session_state.freeze = None
+            st.session_state.data = []
+            st.session_state.t = 0
 
 with right:
     st.subheader("Dartboard")
-    board_slot = st.empty()  # draw into the same slot each rerun
 
-    if st.session_state.mode == "flying":
-        st.session_state.flight_frame += 1
-        frames = 12
-        progress = min(st.session_state.flight_frame / frames, 1.0)
+    # ✅ IMPORTANT: only draw the board ONCE per rerun, but reruns are cheap now because board is not drawn repeatedly in animation.
+    # Still, we'll keep it minimal.
+    if st.session_state.hit is None:
+        fig = draw_board(hit=None, title="Ready")
+    else:
+        fig = draw_board(hit=st.session_state.hit, title=f"Score: {st.session_state.last_score}")
 
-        fig = draw_board(hit=None, title=f"Dart approaching… {int(progress * 100)}%")
-        board_slot.pyplot(fig, clear_figure=True)
-        plt.close(fig)  # ✅ CRITICAL: avoid figure leak
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
-        if progress >= 1.0:
-            hx, vy, s = st.session_state.freeze
+    if st.session_state.last_score is not None:
+        st.metric("Score", st.session_state.last_score)
 
-            # Aim point:
-            aim_x = 0.70 * hx
-            aim_y = 0.70 * vy
-
-            # Strength influences noise/spread
-            sigma = 0.03 + 0.10 * s
-            overshoot = 0.00 + 0.12 * s
-
-            x = aim_x + np.random.normal(0, sigma) + overshoot * np.sign(aim_x) * 0.2
-            y = aim_y + np.random.normal(0, sigma) + overshoot * np.sign(aim_y) * 0.2
-
-            st.session_state.hit = (x, y)
-            sc = score_dart(x, y)
-            st.session_state.last_score = sc
-
-            r = math.sqrt(x * x + y * y)
-            st.session_state.data.append(
-                {
-                    "throw_id": len(st.session_state.data) + 1,
-                    "hx": hx,
-                    "vy": vy,
-                    "strength": s,
-                    "x": x,
-                    "y": y,
-                    "radius": r,
-                    "score": sc,
-                }
-            )
-
-            st.session_state.mode = "landed"
-
-    if st.session_state.mode == "landed":
-        x, y = st.session_state.hit
-        sc = st.session_state.last_score
-
-        fig = draw_board(hit=(x, y), title=f"LANDED — Score: {sc}")
-        board_slot.pyplot(fig, clear_figure=True)
-        plt.close(fig)  # ✅ CRITICAL
-
-        st.metric("Score", sc)
-        st.caption("Use this score + landing data for Descriptive Stats / SPC / Capability, etc.")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Next Throw ↻", use_container_width=True):
-                st.session_state.mode = "calibrating"
-                st.session_state.freeze = None
-                st.session_state.hit = None
-                st.session_state.last_score = None
-        with c2:
-            if st.button("Reset Session 🧹", use_container_width=True):
-                st.session_state.mode = "calibrating"
-                st.session_state.t = 0
-                st.session_state.freeze = None
-                st.session_state.hit = None
-                st.session_state.last_score = None
-                st.session_state.data = []
-                st.session_state.flight_frame = 0
-
-
-# Dataset view
+# Dataset
 st.divider()
 st.subheader("Collected Data (for SPC / Analytics)")
 if st.session_state.data:
     st.dataframe(st.session_state.data, use_container_width=True)
 
     import pandas as pd
-
     df = pd.DataFrame(st.session_state.data)
     st.download_button(
         "Download CSV",
