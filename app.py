@@ -17,41 +17,35 @@ def score_by_distance(x: float, y: float, max_score: int = 100, r_zero: float = 
     s = max_score * (1.0 - (r / r_zero) ** 2)  # quadratic falloff
     return int(round(max(0.0, s)))
 
-
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
-
 
 # -----------------------------
 # Session state init
 # -----------------------------
 if "t" not in st.session_state:
     st.session_state.t = 0
-
 if "freeze" not in st.session_state:
     st.session_state.freeze = None  # (hx, vy, strength)
-
 if "hit" not in st.session_state:
     st.session_state.hit = None  # (x, y)
-
 if "last_score" not in st.session_state:
     st.session_state.last_score = None
-
 if "data" not in st.session_state:
     st.session_state.data = []  # list of dict rows
-
 if "show_throws" not in st.session_state:
     st.session_state.show_throws = False
 
+# Convenience flag
+view_mode = bool(st.session_state.show_throws)
 
 # -----------------------------
 # Auto-refresh ONLY to animate the calibration bars
-# Freeze calibration movement when viewing throws.
+# (stop animation when viewing throws)
 # -----------------------------
-if not st.session_state.show_throws:
+if not view_mode:
     st_autorefresh(interval=140, key="tick")
     st.session_state.t += 1
-
 
 # -----------------------------
 # Layout
@@ -68,8 +62,8 @@ with left:
     vy = math.sin(t / 9.0 + 1.7)  # -1..1
     strength = (math.sin(t / 11.0 + 0.8) + 1) / 2  # 0..1
 
-    # If viewing throws: freeze deck at current live values (if not already frozen)
-    if st.session_state.show_throws and st.session_state.freeze is None:
+    # If entering view_mode: freeze deck at current live values (once)
+    if view_mode and st.session_state.freeze is None:
         st.session_state.freeze = (hx, vy, strength)
 
     # Display frozen values if present; otherwise live
@@ -90,7 +84,8 @@ with left:
     st.progress(int(live_s * 100))
     st.caption(f"strength = {live_s:.3f}")
 
-    throw = st.button("🎯 THROW", type="primary", use_container_width=True, disabled=st.session_state.show_throws)
+    # THROW disabled in view_mode
+    throw = st.button("🎯 THROW", type="primary", use_container_width=True, disabled=view_mode)
 
     if throw:
         # Freeze values at the throw moment
@@ -113,7 +108,6 @@ with left:
 
         st.session_state.hit = (x, y)
 
-        # Scoring: based on distance from center
         sc = score_by_distance(x, y, max_score=100, r_zero=1.0)
         st.session_state.last_score = sc
 
@@ -132,22 +126,25 @@ with left:
         )
 
     c1, c2 = st.columns(2)
+
     with c1:
         if st.button("Clear last hit", use_container_width=True):
             st.session_state.hit = None
             st.session_state.last_score = None
-            # If not viewing throws, allow movement again by unfreezing
-            if not st.session_state.show_throws:
+            # If not in view mode, allow movement again
+            if not view_mode:
                 st.session_state.freeze = None
+
     with c2:
-        if st.button("Reset session 🧹", use_container_width=True):
+        # Reset should be disabled in view_mode (as requested)
+        if st.button("Reset session 🧹", use_container_width=True, disabled=view_mode):
             st.session_state.hit = None
             st.session_state.last_score = None
             st.session_state.freeze = None
             st.session_state.data = []
             st.session_state.t = 0
-            st.session_state.show_throws = False
-
+            st.session_state.show_throws = False  # ✅ force exit view mode
+            st.rerun()  # ✅ immediate rerun so THROW enables right away
 
 with right:
     st.subheader("Virtual Board")
@@ -175,7 +172,6 @@ with right:
     if st.session_state.last_score is not None:
         st.metric("Score", st.session_state.last_score)
 
-
 st.divider()
 st.subheader("Collected Data (for SPC / Analytics)")
 
@@ -183,7 +179,6 @@ if st.session_state.data:
     dfd = pd.DataFrame(st.session_state.data)
     st.dataframe(dfd, use_container_width=True)
 
-    # Buttons row: Download CSV + View my THROWs
     b1, b2 = st.columns([1, 1])
 
     with b1:
@@ -198,14 +193,11 @@ if st.session_state.data:
     with b2:
         if st.button("View my THROWs", use_container_width=True):
             st.session_state.show_throws = not st.session_state.show_throws
-            # When turning ON: freeze the deck at current live values
-            if st.session_state.show_throws and st.session_state.freeze is None:
-                st.session_state.freeze = (hx, vy, strength)
-            # When turning OFF: unfreeze to resume movement
+            # If turning OFF view mode, unfreeze deck so it can move again
             if not st.session_state.show_throws:
                 st.session_state.freeze = None
+            st.rerun()
 
-    # Show all throws chart (labeled by throw_id) when toggled on
     if st.session_state.show_throws:
         st.markdown("#### My THROWs (all points labeled by throw_id)")
 
@@ -221,7 +213,6 @@ if st.session_state.data:
 
         points = base.mark_circle(size=120)
         labels = base.mark_text(dx=10, dy=-10, fontSize=12).encode(text=alt.Text("throw_id:Q"))
-
         st.altair_chart(points + labels, use_container_width=True)
 
 else:
