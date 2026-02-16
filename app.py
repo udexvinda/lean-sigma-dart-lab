@@ -38,15 +38,22 @@ if "data" not in st.session_state:
 if "show_throws" not in st.session_state:
     st.session_state.show_throws = False
 
+# NEW: pause autorefresh for a couple of reruns after key button events
+if "pause_refresh" not in st.session_state:
+    st.session_state.pause_refresh = 0
+
 view_mode = bool(st.session_state.show_throws)
 
 # -----------------------------
 # Auto-refresh ONLY to animate the calibration bars
-# (stop animation when viewing throws)
+# Pause refresh briefly after a THROW so click doesn't get "eaten".
 # -----------------------------
-if not view_mode:
-    st_autorefresh(interval=140, key="tick")
-    st.session_state.t += 1
+if st.session_state.pause_refresh > 0:
+    st.session_state.pause_refresh -= 1
+else:
+    if not view_mode:
+        st_autorefresh(interval=220, key="tick")  # slightly slower = fewer collisions
+        st.session_state.t += 1
 
 # -----------------------------
 # Layout
@@ -89,6 +96,9 @@ with left:
     throw = st.button("🎯 THROW", type="primary", use_container_width=True, disabled=view_mode)
 
     if throw:
+        # Pause autorefresh briefly so this click always registers cleanly
+        st.session_state.pause_refresh = 2
+
         # Freeze values at the throw moment
         st.session_state.freeze = (hx, vy, strength)
 
@@ -126,24 +136,28 @@ with left:
             }
         )
 
+        st.rerun()  # immediate redraw after throw
+
     c1, c2 = st.columns(2)
 
     with c1:
         if st.button("Clear last hit", use_container_width=True):
+            st.session_state.pause_refresh = 1
             st.session_state.hit = None
             st.session_state.last_score = None
             if not view_mode:
                 st.session_state.freeze = None
+            st.rerun()
 
     with c2:
-        # ✅ Reset session ALWAYS enabled
         if st.button("Reset session 🧹", use_container_width=True):
+            st.session_state.pause_refresh = 1
             st.session_state.hit = None
             st.session_state.last_score = None
             st.session_state.freeze = None
             st.session_state.data = []
             st.session_state.t = 0
-            st.session_state.show_throws = False  # ensure THROW becomes enabled
+            st.session_state.show_throws = False
             st.rerun()
 
 with right:
@@ -192,8 +206,8 @@ if st.session_state.data:
 
     with b2:
         if st.button("View my THROWs", use_container_width=True):
+            st.session_state.pause_refresh = 1
             st.session_state.show_throws = not st.session_state.show_throws
-            # If turning OFF view mode, unfreeze deck so it can move again
             if not st.session_state.show_throws:
                 st.session_state.freeze = None
             st.rerun()
@@ -215,6 +229,5 @@ if st.session_state.data:
         labels = base.mark_text(dx=10, dy=-10, fontSize=12).encode(text=alt.Text("throw_id:Q"))
 
         st.altair_chart(points + labels, use_container_width=True)
-
 else:
     st.info("No throws yet. Hit THROW to generate your first data point.")
