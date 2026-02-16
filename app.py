@@ -17,8 +17,10 @@ def score_by_distance(x: float, y: float, max_score: int = 100, r_zero: float = 
     s = max_score * (1.0 - (r / r_zero) ** 2)  # quadratic falloff
     return int(round(max(0.0, s)))
 
+
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
+
 
 # -----------------------------
 # Session state init
@@ -36,7 +38,6 @@ if "data" not in st.session_state:
 if "show_throws" not in st.session_state:
     st.session_state.show_throws = False
 
-# Convenience flag
 view_mode = bool(st.session_state.show_throws)
 
 # -----------------------------
@@ -84,7 +85,7 @@ with left:
     st.progress(int(live_s * 100))
     st.caption(f"strength = {live_s:.3f}")
 
-    # THROW disabled in view_mode
+    # THROW disabled in view_mode (calibration is frozen while viewing throws)
     throw = st.button("🎯 THROW", type="primary", use_container_width=True, disabled=view_mode)
 
     if throw:
@@ -131,20 +132,19 @@ with left:
         if st.button("Clear last hit", use_container_width=True):
             st.session_state.hit = None
             st.session_state.last_score = None
-            # If not in view mode, allow movement again
             if not view_mode:
                 st.session_state.freeze = None
 
     with c2:
-        # Reset should be disabled in view_mode (as requested)
-        if st.button("Reset session 🧹", use_container_width=True, disabled=view_mode):
+        # ✅ Reset session ALWAYS enabled
+        if st.button("Reset session 🧹", use_container_width=True):
             st.session_state.hit = None
             st.session_state.last_score = None
             st.session_state.freeze = None
             st.session_state.data = []
             st.session_state.t = 0
-            st.session_state.show_throws = False  # ✅ force exit view mode
-            st.rerun()  # ✅ immediate rerun so THROW enables right away
+            st.session_state.show_throws = False  # ensure THROW becomes enabled
+            st.rerun()
 
 with right:
     st.subheader("Virtual Board")
@@ -213,6 +213,7 @@ if st.session_state.data:
 
         points = base.mark_circle(size=120)
         labels = base.mark_text(dx=10, dy=-10, fontSize=12).encode(text=alt.Text("throw_id:Q"))
+
         st.altair_chart(points + labels, use_container_width=True)
 
 else:
