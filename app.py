@@ -8,46 +8,24 @@ import altair as alt
 st.set_page_config(page_title="Lean Sigma Dart Lab", layout="wide")
 
 # -----------------------------
-# Dartboard scoring (simplified)
+# Scoring: Highest at center (0,0), decreases with distance (radius)
 # -----------------------------
-SECTOR_ORDER = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5]
-
-
-def angle_to_sector(theta_deg: float) -> int:
-    """theta_deg: 0 at +x axis, CCW. Dartboard sectors start at 20 centered at 90 degrees (top)."""
-    theta = theta_deg % 360.0
-    shifted = (90.0 - theta) % 360.0
-    idx = int((shifted + 9.0) // 18.0) % 20
-    return SECTOR_ORDER[idx]
-
-
-def score_dart(x: float, y: float) -> int:
+def score_by_distance(x: float, y: float, max_score: int = 100, r_zero: float = 1.0) -> int:
     """
-    x,y in normalized board coordinates where radius 1.0 is board edge.
-    Simplified rings:
-      - Bull: r <= 0.05 => 50
-      - Outer bull: r <= 0.10 => 25
-      - Triple ring: 0.55 <= r <= 0.60
-      - Double ring: 0.95 <= r <= 1.00
-      - Single otherwise within r<=1
-      - Miss if r>1
+    Score model:
+      - max_score at r = 0 (x=0,y=0)
+      - decreases smoothly as r increases
+      - becomes 0 at r >= r_zero
+
+    r_zero = radius at which score hits 0 (use 1.0 to match the board edge concept)
     """
     r = math.sqrt(x * x + y * y)
-    if r > 1.0:
+    if r >= r_zero:
         return 0
-    if r <= 0.05:
-        return 50
-    if r <= 0.10:
-        return 25
-
-    theta = math.degrees(math.atan2(y, x))
-    base = angle_to_sector(theta)
-
-    if 0.55 <= r <= 0.60:
-        return 3 * base
-    if 0.95 <= r <= 1.00:
-        return 2 * base
-    return base
+    # Quadratic falloff (feels more "target-like" than linear)
+    # score = max_score * (1 - (r/r_zero)^2)
+    s = max_score * (1.0 - (r / r_zero) ** 2)
+    return int(round(max(0.0, s)))
 
 
 def clamp(v: float, lo: float, hi: float) -> float:
@@ -71,6 +49,9 @@ if "last_score" not in st.session_state:
 
 if "data" not in st.session_state:
     st.session_state.data = []  # list of dict rows
+
+if "show_throws" not in st.session_state:
+    st.session_state.show_throws = False
 
 
 # -----------------------------
@@ -130,12 +111,14 @@ with left:
         x = aim_x + np.random.normal(0, sigma) + overshoot * np.sign(aim_x) * 0.2
         y = aim_y + np.random.normal(0, sigma) + overshoot * np.sign(aim_y) * 0.2
 
-        # Allow slight overshoot outside the board for "miss" (kept in visible frame)
+        # Keep visible (even if miss)
         x = clamp(x, -1.2, 1.2)
         y = clamp(y, -1.2, 1.2)
 
         st.session_state.hit = (x, y)
-        sc = score_dart(x, y)
+
+        # NEW scoring: based on distance from center
+        sc = score_by_distance(x, y, max_score=100, r_zero=1.0)
         st.session_state.last_score = sc
 
         r = math.sqrt(x * x + y * y)
@@ -165,11 +148,13 @@ with left:
             st.session_state.freeze = None
             st.session_state.data = []
             st.session_state.t = 0
+            st.session_state.show_throws = False
+
 
 with right:
     st.subheader("Virtual Board")
 
-    # Only plot the real hit (no fake bound points)
+    # Show only the latest hit on the right panel
     if st.session_state.hit is None:
         dfp = pd.DataFrame({"x": [], "y": []})
     else:
@@ -178,10 +163,11 @@ with right:
 
     chart = (
         alt.Chart(dfp)
-        .mark_circle(size=140)
+        .mark_circle(size=160)
         .encode(
             x=alt.X("x:Q", scale=alt.Scale(domain=[-1.2, 1.2])),
             y=alt.Y("y:Q", scale=alt.Scale(domain=[-1.2, 1.2])),
+            tooltip=["x:Q", "y:Q"],
         )
         .properties(height=520)
     )
@@ -191,6 +177,7 @@ with right:
     if st.session_state.last_score is not None:
         st.metric("Score", st.session_state.last_score)
 
+
 st.divider()
 st.subheader("Collected Data (for SPC / Analytics)")
 
@@ -198,11 +185,44 @@ if st.session_state.data:
     dfd = pd.DataFrame(st.session_state.data)
     st.dataframe(dfd, use_container_width=True)
 
-    st.download_button(
-        "Download CSV",
-        dfd.to_csv(index=False).encode("utf-8"),
-        "dart_data.csv",
-        "text/csv",
-    )
+    # Buttons row: Download CSV + View my THROWs (side by side)
+    b1, b2 = st.columns([1, 1])
+
+    with b1:
+        st.download_button(
+            "Download CSV",
+            dfd.to_csv(index=False).encode("utf-8"),
+            "dart_data.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+
+    with b2:
+        if st.button("View my THROWs", use_container_width=True):
+            st.session_state.show_throws = not st.session_state.show_throws
+
+    # Show all throws chart (labeled by throw_id) when toggled on
+    if st.session_state.show_throws:
+        st.markdown("#### My THROWs (all points labeled by throw_id)")
+
+        base = (
+            alt.Chart(dfd)
+            .encode(
+                x=alt.X("x:Q", scale=alt.Scale(domain=[-1.2, 1.2])),
+                y=alt.Y("y:Q", scale=alt.Scale(domain=[-1.2, 1.2])),
+                tooltip=["throw_id:Q", "x:Q", "y:Q", "radius:Q", "score:Q"],
+            )
+            .properties(height=520)
+        )
+
+        points = base.mark_circle(size=120)
+
+        labels = (
+            base.mark_text(dx=10, dy=-10, fontSize=12)
+            .encode(text=alt.Text("throw_id:Q"))
+        )
+
+        st.altair_chart(points + labels, use_container_width=True)
+
 else:
     st.info("No throws yet. Hit THROW to generate your first data point.")
